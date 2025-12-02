@@ -19,36 +19,87 @@ st.title("🔍 Predictive Model Builder from Kaggle or Upload")
 # -------------------------
 # Función para descargar dataset de Kaggle
 # -------------------------
-def download_kaggle_dataset(dataset_name):
+def download_kaggle_dataset(input_text):
+    # Extraer el ID si es un URL
+    if "kaggle.com" in input_text:
+        # Soportar URLs con o sin /datasets/
+        parts = input_text.strip().split('/')
+        try:
+            # El owner está antes de "netflix-shows", buscar desde el final
+            # Ej: [..., 'datasets', 'owner', 'name'] o [..., 'owner', 'name']
+            if 'datasets' in parts:
+                idx = parts.index('datasets')
+                owner = parts[idx + 1]
+                name = parts[idx + 2]
+            else:
+                # URL corto: kaggle.com/owner/name
+                owner = parts[-2]
+                name = parts[-1]
+            dataset_name = f"{owner}/{name}"
+        except IndexError:
+            st.error("URL de Kaggle no válido. Usa el formato: https://www.kaggle.com/datasets/owner/name")
+            return None
+    else:
+        dataset_name = input_text.strip()
+
+    if not dataset_name or '/' not in dataset_name:
+        st.error("Ingresa un nombre válido como: owner/name o una URL de Kaggle.")
+        return None
+
+    st.info(f"Intentando descargar: {dataset_name}")
+
     try:
-        # Crear directorio temporal
-        os.makedirs("kaggle_data", exist_ok=True)
-        # Descargar con kaggle CLI
-        result = subprocess.run(
-            [sys.executable, "-m", "kaggle", "datasets", "download", "-d", dataset_name, "-p", "kaggle_data", "--unzip"],
+        # Verificar si el dataset existe (opcional: usar kaggle datasets list)
+        result_check = subprocess.run(
+            [sys.executable, "-m", "kaggle", "datasets", "list", "-s", dataset_name.split('/')[1]],
             capture_output=True, text=True
         )
+        if dataset_name not in result_check.stdout:
+            st.warning("⚠️ El dataset podría no existir o no ser público. Intentando descargar de todas formas...")
+
+        os.makedirs("kaggle_data", exist_ok=True)
+        result = subprocess.run(
+            [sys.executable, "-m", "kaggle", "datasets", "download", "-d", dataset_name, "-p", "kaggle_data", "--unzip"],
+            capture_output=True, text=True, timeout=120
+        )
         if result.returncode != 0:
-            st.error(f"Error descargando dataset: {result.stderr}")
+            stderr_msg = result.stderr.lower()
+            if "404" in stderr_msg or "not found" in stderr_msg:
+                st.error(f"❌ Dataset no encontrado: {dataset_name}. ¿Está público?")
+            elif "403" in stderr_msg or "forbidden" in stderr_msg:
+                st.error("❌ Acceso denegado. ¿El dataset es privado o necesitas aceptar términos en Kaggle?")
+            else:
+                st.error(f"Error al descargar: {result.stderr}")
             return None
-        
-        # Buscar archivo CSV o Excel
-        files = [f for f in os.listdir("kaggle_data") if f.endswith(('.csv', '.xlsx', '.xls'))]
+
+        # Buscar archivo de datos
+        files = []
+        for ext in ('.csv', '.xlsx', '.xls', '.json'):
+            files.extend([f for f in os.listdir("kaggle_data") if f.endswith(ext)])
         if not files:
-            st.error("No se encontró archivo compatible en el dataset.")
+            st.error("No se encontraron archivos CSV, Excel o JSON en el dataset descargado.")
             return None
-        
-        # Cargar primer archivo válido
+
         file_path = os.path.join("kaggle_data", files[0])
         if file_path.endswith('.csv'):
             df = pd.read_csv(file_path)
-        else:
+        elif file_path.endswith(('.xlsx', '.xls')):
             df = pd.read_excel(file_path)
-        return df
-    except Exception as e:
-        st.error(f"Error: {e}")
-        return None
+        elif file_path.endswith('.json'):
+            df = pd.read_json(file_path)
+        else:
+            st.error("Formato de archivo no soportado.")
+            return None
 
+        st.success(f"✅ Dataset '{dataset_name}' cargado con {df.shape[0]} filas y {df.shape[1]} columnas.")
+        return df
+
+    except subprocess.TimeoutExpired:
+        st.error("⏳ Tiempo de espera agotado al descargar el dataset.")
+        return None
+    except Exception as e:
+        st.error(f"Error inesperado: {str(e)}")
+        return None
 # -------------------------
 # Función para entrenar modelo y graficar
 # -------------------------
