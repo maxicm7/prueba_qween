@@ -6,4 +6,4 @@ seaborn
 matplotlib
 kaggle
 joblib
-openpyxls
+openpyxl
